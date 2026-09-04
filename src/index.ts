@@ -1,188 +1,151 @@
-import Schema from '@deepseek-ai/schemastery'
-import type { Context } from '@deepseek-ai/cordis'
-import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
+import type { Context } from "@deepseek-ai/cordis";
+import Schema from "@deepseek-ai/schemastery";
 import {
   Agent,
-  Dispatcher,
+  type Dispatcher,
+  type RequestInfo as UndiciRequestInfo,
+  type RequestInit as UndiciRequestInit,
   ProxyAgent,
-  getGlobalDispatcher,
-  setGlobalDispatcher,
-} from 'undici'
+  fetch as undiciFetch,
+} from "undici";
 
-export const name = 'dsh-proxy'
-export const inject = { settings: { required: false } }
+import { NS, name as pluginName, type ProxyConfig, proxyUrlOf, shouldBypass } from "./shared.js";
 
-/** Settings namespace this plugin owns; the browser card pairs with it. */
-export const NS = settingsNamespace('dsh-proxy')
+export { NS, proxyUrlOf, shouldBypass };
+export type { ProxyConfig };
+export const name = pluginName;
+export const inject = { settings: { required: false } };
 
-export interface ProxyConfig {
-  enabled?: boolean
-  host?: string
-  port?: number
-  noProxy?: string[]
+export const Config = Schema.intersect([
+  Schema.object({
+    enabled: Schema.boolean().default(true).description("Enable the custom HTTP proxy"),
+    host: Schema.string().default("127.0.0.1").description("Proxy host"),
+    port: Schema.number().default(7890).description("Proxy port"),
+    noProxy: Schema.array(Schema.string())
+      .role("table")
+      .default(["localhost", "127.0.0.1", "::1"])
+      .description("Hosts that bypass the proxy"),
+  }).description("HTTP proxy"),
+  Schema.object({
+    proxyUrl: Schema.string().description("Full proxy URL; overrides host/port when set"),
+  }).hidden(),
+]);
+
+const FETCH_PATCH = Symbol.for("dsh-proxy.fetch");
+const ORIGINAL_FETCH = Symbol.for("dsh-proxy.original-fetch");
+
+type PatchedFetch = typeof globalThis.fetch & { [FETCH_PATCH]?: boolean };
+
+type SettingsScope = {
+  get(): ProxyConfig;
+  watch(callback: (next: ProxyConfig) => void): () => void;
+};
+
+type SettingsService = {
+  register(ns: string, schema: unknown, options?: { base?: ProxyConfig }): SettingsScope;
+};
+
+function originHost(input: UndiciRequestInfo): string {
+  try {
+    if (typeof input === "string") return new URL(input).hostname;
+    if (input instanceof URL) return input.hostname;
+    if (typeof Request !== "undefined" && input instanceof Request) {
+      return new URL(input.url).hostname;
+    }
+    if (typeof input === "object" && input && "url" in input) {
+      return new URL(String((input as { url: string }).url)).hostname;
+    }
+  } catch {
+    /* leave empty — treat as non-bypass */
+  }
+  return "";
 }
 
-export const Config = Schema.object({
-  enabled: Schema.boolean()
-    .default(true)
-    .description('启用自定义代理。关闭后恢复 DSH 宿主进程原来的直连方式。'),
-  host: Schema.string()
-    .default('127.0.0.1')
-    .description('代理服务器地址，例如 127.0.0.1（Clash/mihomo 本机混合端口）。'),
-  port: Schema.natural()
-    .max(65535)
-    .default(7890)
-    .description('代理服务器端口，例如 7890（Clash/mihomo 混合端口）。'),
-  noProxy: Schema.array(String)
-    .default(['localhost', '127.0.0.1', '::1', '[::1]'])
-    .description('绕过代理的主机名单：精确匹配主机名，或以 . 开头匹配域名后缀（如 .lan）。'),
-})
-
-const DEFAULT_NO_PROXY = ['localhost', '127.0.0.1', '::1', '[::1]']
-
-function normalizeHostname(rawHost: string): string {
-  const host = rawHost.trim().toLowerCase()
-  // Strip IPv6 brackets so "[::1]" and "::1" compare equal.
-  return host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host
+function rememberOriginalFetch(original: typeof globalThis.fetch): void {
+  const g = globalThis as typeof globalThis & { [ORIGINAL_FETCH]?: typeof globalThis.fetch };
+  if (g[ORIGINAL_FETCH] === undefined) g[ORIGINAL_FETCH] = original;
 }
 
-export function shouldBypass(rawHost: string, noProxy: readonly string[]): boolean {
-  const host = normalizeHostname(rawHost)
-  if (!host) return false
-  for (const rawEntry of noProxy) {
-    const entry = rawEntry.trim().toLowerCase()
-    if (!entry) continue
-    if (entry === '*') return true
-    if (entry.startsWith('.')) {
-      // Suffix match: ".lan" covers "nas.lan" but not "lan" itself.
-      if (host.endsWith(entry)) return true
-      continue
-    }
-    if (host === normalizeHostname(entry)) return true
-  }
-  return false
+function unwrapOriginalFetch(): typeof globalThis.fetch {
+  const g = globalThis as typeof globalThis & { [ORIGINAL_FETCH]?: typeof globalThis.fetch };
+  return g[ORIGINAL_FETCH] ?? globalThis.fetch.bind(globalThis);
 }
 
-/** Compose the http proxy URL from the configured host and port. */
-export function proxyUrlOf(config: ProxyConfig): string {
-  const host = (config.host ?? '127.0.0.1').trim()
-  const port = config.port ?? 7890
-  if (!host) throw new Error('dsh-proxy: host is empty')
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error(`dsh-proxy: port ${JSON.stringify(port)} is not a valid TCP port`)
-  }
-  // Bracket IPv6 literals so the URL parses correctly.
-  const authority = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host
-  return `http://${authority}:${port}`
+function installFetchPatch(pick: (hostname: string) => Dispatcher): () => void {
+  const current = globalThis.fetch as PatchedFetch;
+  const original = current[FETCH_PATCH] ? unwrapOriginalFetch() : current;
+  const patched = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const host = originHost(input as UndiciRequestInfo);
+    const dispatcher = pick(host);
+    return undiciFetch(input as UndiciRequestInfo, {
+      ...(init as UndiciRequestInit | undefined),
+      dispatcher,
+    }) as unknown as Promise<Response>;
+  }) as PatchedFetch;
+  patched[FETCH_PATCH] = true;
+  rememberOriginalFetch(original);
+  globalThis.fetch = patched;
+  return () => {
+    if ((globalThis.fetch as PatchedFetch)[FETCH_PATCH]) {
+      globalThis.fetch = original;
+    }
+  };
 }
 
-/**
- * Dispatcher that sends bypass-listed hosts straight out and everything else
- * through the proxy. Both agents are created lazily and owned by this
- * instance's close().
- */
-class RoutedDispatcher extends Dispatcher {
-  private readonly direct: Agent
-  private readonly proxied: ProxyAgent
+export function apply(ctx: Context, config: ProxyConfig): void {
+  const logger = ctx.logger("dsh-proxy");
+  let direct: Agent | undefined;
+  let proxy: ProxyAgent | undefined;
+  let uninstallFetch: (() => void) | undefined;
+  let current: ProxyConfig = config;
 
-  constructor(proxyUrl: string, private readonly noProxy: readonly string[]) {
-    super()
-    this.direct = new Agent()
-    this.proxied = new ProxyAgent(proxyUrl)
-  }
+  const uninstall = (reason: string): void => {
+    uninstallFetch?.();
+    uninstallFetch = undefined;
+    try { proxy?.close(); } catch { /* ignore */ }
+    try { direct?.close(); } catch { /* ignore */ }
+    proxy = undefined;
+    direct = undefined;
+    logger.info("proxy uninstalled (%s)", reason);
+  };
 
-  dispatch(
-    opts: Dispatcher.DispatchOptions,
-    handler: Dispatcher.DispatchHandler,
-  ): boolean {
-    const origin = typeof opts.origin === 'string' ? opts.origin : opts.origin?.toString()
-    let host = ''
-    try {
-      host = origin ? new URL(origin).hostname : ''
-    } catch {
-      host = ''
+  const install = (raw: ProxyConfig): void => {
+    current = raw;
+    if (raw.enabled === false) {
+      uninstall("disabled");
+      return;
     }
-    if (host && shouldBypass(host, this.noProxy)) {
-      return this.direct.dispatch(opts, handler)
-    }
-    return this.proxied.dispatch(opts, handler)
-  }
+    const url = proxyUrlOf(raw);
+    const noProxy = raw.noProxy ?? ["localhost", "127.0.0.1", "::1"];
+    const nextDirect = new Agent();
+    const nextProxy = new ProxyAgent(url);
+    const pick = (hostname: string): Dispatcher =>
+      hostname && shouldBypass(hostname, noProxy) ? nextDirect : nextProxy;
 
-  async close(): Promise<void> {
-    await Promise.allSettled([this.direct.close(), this.proxied.close()])
-  }
+    uninstallFetch?.();
+    try { proxy?.close(); } catch { /* ignore */ }
+    try { direct?.close(); } catch { /* ignore */ }
+    direct = nextDirect;
+    proxy = nextProxy;
+    uninstallFetch = installFetchPatch(pick);
+    logger.info("proxy installed %s (noProxy=%s)", url, noProxy.join(","));
+  };
 
-  async destroy(): Promise<void> {
-    await Promise.allSettled([this.direct.destroy(), this.proxied.destroy()])
-  }
+  install(current);
 
-  [Symbol.asyncDispose](): Promise<void> {
-    return this.close()
-  }
-}
-
-export function apply(ctx: Context, config: ProxyConfig) {
-  const logger = ctx.logger(name)
-
-  // Snapshot the dispatcher that was global when the plugin loaded. Restoring
-  // it on dispose keeps unload symmetric even if other code chained its own
-  // dispatcher on top of ours in between.
-  const previous = getGlobalDispatcher()
-  let installed: RoutedDispatcher | undefined
-  let current = () => config
-
-  const uninstall = (reason: string) => {
-    if (installed === undefined) return
-    const active = installed
-    installed = undefined
-    setGlobalDispatcher(previous)
-    active.close().catch((error) => logger.warn('closing proxy dispatcher failed:', error))
-    logger.info(`custom proxy disabled (${reason}); restored the previous global dispatcher`)
-  }
-
-  const install = (rawConfig: ProxyConfig) => {
-    if (rawConfig.enabled === false) {
-      uninstall('enabled = false')
-      return
-    }
-    const proxyUrl = proxyUrlOf(rawConfig)
-    const noProxy = rawConfig.noProxy ?? DEFAULT_NO_PROXY
-    if (installed !== undefined) {
-      // Config changed while active: swap atomically so in-flight requests
-      // keep their dispatcher while new ones pick up the new settings.
-      uninstall('reconfiguring')
-    }
-    installed = new RoutedDispatcher(proxyUrl, noProxy)
-    setGlobalDispatcher(installed)
-    logger.info(
-      `custom proxy active: all host-side fetch traffic routes via ${proxyUrl}` +
-        (noProxy.length > 0 ? ` (bypass: ${noProxy.join(', ')})` : ''),
-    )
-  }
-
-  install(current())
-
-  // Register the settings namespace so the browser card in
-  // Settings → Plugins → 插件配置 can edit this section live; every accepted
-  // write re-runs install() with the freshly resolved config, no restart.
-  installSettingsSection(ctx, NS, Config, config, {
-    setSource: (source: () => ProxyConfig) => {
-      current = source
-    },
-    onChange: () => {
+  const settings = (ctx as Context & { settings?: SettingsService }).settings;
+  if (settings && typeof settings.register === "function") {
+    const scope = settings.register(NS, Config, { base: config });
+    current = scope.get() ?? config;
+    install(current);
+    scope.watch((next) => {
       try {
-        install(current())
+        install(next);
       } catch (error) {
-        logger.error('dsh-proxy: keeping the previous dispatcher after a refused update')
-        logger.error(error)
+        logger.error("failed to apply proxy settings: %s", error);
       }
-    },
-  })
-
-  const events = ctx as unknown as {
-    on?: (event: string, listener: (...args: never[]) => void) => void
+    });
   }
-  events.on?.('dispose', () => uninstall('plugin unloaded'))
-}
 
-export default { name, inject, Config, apply }
+  ctx.effect(() => () => uninstall("plugin unloaded"), "dsh-proxy: restore fetch");
+}

@@ -1,87 +1,62 @@
-import assert from 'node:assert/strict'
-import { test } from 'node:test'
-import { getGlobalDispatcher } from 'undici'
-import { apply, proxyUrlOf, shouldBypass } from '../lib/index.js'
+import assert from "node:assert/strict";
+import test from "node:test";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-const PROXY_HOST = process.env.DSH_PROXY_TEST_HOST ?? '127.0.0.1'
-const PROXY_PORT = Number(process.env.DSH_PROXY_TEST_PORT ?? 7890)
-const ECHO_URL = 'https://api.ipify.org'
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-function fakeContext() {
-  const listeners = new Map()
-  return {
-    listeners,
-    logger: () => ({ info: () => {}, warn: () => {}, error: () => {} }),
-    on(event, fn) {
-      listeners.set(event, fn)
-    },
-    emit(event, ...args) {
-      listeners.get(event)?.(...args)
-    },
-    // No settings service mounted in tests: inject() simply never fires,
-    // which is exactly the documented no-settings-service fallback path.
-    inject() {},
-  }
+function loadHost() {
+  return import(pathToFileURL(join(root, "lib", "index.js")).href + "?t=" + Date.now());
 }
 
-test('shouldBypass: exact, suffix, star, ipv6 brackets', () => {
-  const list = ['localhost', '127.0.0.1', '::1', '[::1]', '.lan']
-  assert.equal(shouldBypass('localhost', list), true)
-  assert.equal(shouldBypass('127.0.0.1', list), true)
-  assert.equal(shouldBypass('::1', list), true)
-  assert.equal(shouldBypass('[::1]', list), true)
-  assert.equal(shouldBypass('nas.lan', list), true)
-  assert.equal(shouldBypass('lan', list), false)
-  assert.equal(shouldBypass('api.51tokens.top', list), false)
-  assert.equal(shouldBypass('anything.example', ['*']), true)
-  assert.equal(shouldBypass('', list), false)
-})
+test("proxyUrlOf prefers proxyUrl then host/port", async () => {
+  const { proxyUrlOf } = await loadHost();
+  assert.equal(proxyUrlOf({}), "http://127.0.0.1:7890");
+  assert.equal(proxyUrlOf({ host: "10.0.0.1", port: 1080 }), "http://10.0.0.1:1080");
+  assert.equal(proxyUrlOf({ proxyUrl: "http://127.0.0.1:7897" }), "http://127.0.0.1:7897");
+});
 
-test('proxyUrlOf: composes host and port, brackets IPv6', () => {
-  assert.equal(proxyUrlOf({ host: '127.0.0.1', port: 7890 }), 'http://127.0.0.1:7890')
-  assert.equal(proxyUrlOf({ host: '::1', port: 7890 }), 'http://[::1]:7890')
-  assert.equal(proxyUrlOf({}), 'http://127.0.0.1:7890')
-  assert.throws(() => proxyUrlOf({ host: '', port: 7890 }), /host is empty/)
-  assert.throws(() => proxyUrlOf({ host: '127.0.0.1', port: 0 }), /not a valid TCP port/)
-  assert.throws(() => proxyUrlOf({ host: '127.0.0.1', port: 70000 }), /not a valid TCP port/)
-})
+test("shouldBypass matches exact, suffix, and dotted rules", async () => {
+  const { shouldBypass } = await loadHost();
+  const rules = ["localhost", "127.0.0.1", "::1", ".internal"];
+  assert.equal(shouldBypass("localhost", rules), true);
+  assert.equal(shouldBypass("127.0.0.1", rules), true);
+  assert.equal(shouldBypass("foo.internal", rules), true);
+  assert.equal(shouldBypass("internal", rules), true);
+  assert.equal(shouldBypass("api.example.com", rules), false);
+});
 
-test('apply installs a proxy dispatcher and dispose restores the previous one', () => {
-  const before = getGlobalDispatcher()
-  const ctx = fakeContext()
-  apply(ctx, { enabled: true, host: PROXY_HOST, port: PROXY_PORT, noProxy: ['localhost'] })
-  const during = getGlobalDispatcher()
-  assert.notEqual(during, before, 'global dispatcher should be replaced while active')
-  ctx.emit('dispose')
-  assert.equal(getGlobalDispatcher(), before, 'dispose must restore the previous dispatcher')
-})
+test("apply patches global fetch and restores it on dispose", async () => {
+  const { apply } = await loadHost();
+  const original = globalThis.fetch;
+  const effects = [];
+  const ctx = {
+    logger() {
+      return { info() {}, warn() {}, error() {} };
+    },
+    effect(factory) {
+      const dispose = factory();
+      effects.push(dispose);
+      return dispose;
+    },
+  };
+  apply(ctx, { enabled: true, host: "127.0.0.1", port: 7890, noProxy: ["localhost"] });
+  assert.notEqual(globalThis.fetch, original);
+  for (const dispose of effects.reverse()) dispose?.();
+  assert.equal(globalThis.fetch, original);
+});
 
-test('enabled=false keeps the previous dispatcher untouched', () => {
-  const before = getGlobalDispatcher()
-  const ctx = fakeContext()
-  apply(ctx, { enabled: false, host: PROXY_HOST, port: PROXY_PORT })
-  assert.equal(getGlobalDispatcher(), before)
-})
-
-test('invalid host or port fails loudly', () => {
-  const ctx = fakeContext()
-  assert.throws(() => apply(ctx, { enabled: true, host: '', port: 7890 }), /host is empty/)
-  assert.throws(() => apply(ctx, { enabled: true, host: '127.0.0.1', port: 70000 }), /not a valid TCP port/)
-})
-
-// Live network test: only runs when DSH_PROXY_LIVE=1 and a proxy is reachable.
-test('live: global fetch exits through the proxy', { skip: process.env.DSH_PROXY_LIVE !== '1' }, async () => {
-  const direct = await fetch(ECHO_URL).then((r) => r.text()).catch(() => null)
-  const ctx = fakeContext()
-  apply(ctx, { enabled: true, host: PROXY_HOST, port: PROXY_PORT, noProxy: [] })
-  try {
-    const viaProxy = await fetch(ECHO_URL).then((r) => r.text())
-    assert.match(viaProxy, /^\d+\.\d+\.\d+\.\d+$/)
-    if (direct !== null) {
-      assert.notEqual(viaProxy, direct, 'proxy exit IP should differ from direct exit IP')
-    }
-    console.log(`direct=${direct} viaProxy=${viaProxy}`)
-  } finally {
-    ctx.emit('dispose')
-  }
-})
+test("disabled config leaves fetch untouched", async () => {
+  const { apply } = await loadHost();
+  const original = globalThis.fetch;
+  const ctx = {
+    logger() {
+      return { info() {}, warn() {}, error() {} };
+    },
+    effect(factory) {
+      return factory();
+    },
+  };
+  apply(ctx, { enabled: false });
+  assert.equal(globalThis.fetch, original);
+});

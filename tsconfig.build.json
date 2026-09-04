@@ -1,18 +1,12 @@
 {
+  "extends": "./tsconfig.json",
   "compilerOptions": {
-    "target": "ES2022",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "lib": ["ES2022", "DOM"],
-    "outDir": "lib",
-    "rootDir": "src",
+    "noEmit": false,
     "declaration": true,
     "declarationDir": "lib/types",
-    "strict": true,
-    "skipLibCheck": true,
-    "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true,
-    "sourceMap": false
+    "outDir": "lib",
+    "rootDir": "src",
+    "jsx": "react-jsx"
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx"]
+  "include": ["src/index.ts", "src/shared.ts", "src/shims.d.ts"]
 }

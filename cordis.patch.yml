@@ -1,28 +1,17 @@
 # dsh-proxy bundle patch
 #
-# This file is the `dsh.bundle.patch` layer of the published npm package: when
-# the plugin is installed through the official CLI —
+# Official install:
+#   dsh plugin --profile web add dsh-proxy
+#   dsh plugin --profile web add github:BuLongY/dsh-proxy
 #
-#   dsh plugin --profile <name> add dsh-proxy@<version>
-#
-# — the command reconciles `dsh.profile.bundles` against installed packages
-# and, seeing this declaration, appends `dsh-proxy` to the bundle stack. The
-# profile boot then merges THIS patch (a single `insert` of the plugin row).
-# No profile file edits needed — one command installs and mounts.
-#
-# To point the plugin at another proxy, add `config.proxyUrl` to the inserted
-# plugin row (or edit it later in Settings):
+# The CLI reconciles dsh.profile.bundles from this dsh.bundle.patch declaration.
+# Optional composition override:
 #
 #   - insert:
 #       - id: dsh-proxy
-#         name: 'dsh-proxy'
+#         name: dsh-proxy
 #         config:
 #           proxyUrl: http://127.0.0.1:7890
-#
-# Double-mount guard: if another enabled entry already mounts `dsh-proxy`
-# under a different id (e.g. an aggregate bundle), this row backs off so the
-# global dispatcher is only ever installed once.
 - insert:
     - id: dsh-proxy
-      name: 'dsh-proxy'
-      disabled: !!js "[...ctx.loader.entries()].some((e) => e.options.name === 'dsh-proxy' && e.options.id !== 'dsh-proxy' && !e.disabled)"
+      name: dsh-proxy

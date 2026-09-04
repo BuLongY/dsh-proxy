@@ -1,7 +1,7 @@
 {
   "name": "dsh-proxy",
-  "version": "0.2.1",
-  "description": "Custom HTTP/HTTPS proxy for DeepSeek Harness: routes every host-side fetch (LLM requests, model discovery, market, web search) through your proxy (Clash/mihomo/v2ray) without TUN mode, with a settings card for live host/port edits. 为 DeepSeek Harness 注入自定义 HTTP 代理，无需 TUN 模式，设置页可直接修改地址与端口。",
+  "version": "0.3.0",
+  "description": "Route DeepSeek Harness host-side fetch (LLM, model discovery, market, web search) through a local HTTP/HTTPS proxy such as Clash/mihomo/v2ray, without TUN mode.",
   "keywords": [
     "dsh",
     "dsh-plugin",
@@ -11,6 +11,16 @@
     "clash",
     "network"
   ],
+  "homepage": "https://github.com/BuLongY/dsh-proxy#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BuLongY/dsh-proxy.git"
+  },
+  "bugs": {
+    "url": "https://github.com/BuLongY/dsh-proxy/issues"
+  },
+  "license": "MIT",
+  "author": "BuLongY",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
@@ -23,18 +33,17 @@
       "types": "./lib/types/client.d.ts",
       "default": "./lib/client.js"
     },
-    "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
   "files": [
     "lib/index.js",
     "lib/client.js",
     "lib/types/**/*.d.ts",
-    "src",
     "cordis.patch.yml",
+    "dsh.plugin.json",
     "docs",
     "README.md",
-    "README_EN.md",
+    "README.zh.md",
     "LICENSE"
   ],
   "dsh": {
@@ -44,6 +53,7 @@
     "client": {
       "inject": [
         "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-ui-settings",
         "@deepseek-ai/dsh-client-ui-slots"
       ],
@@ -58,24 +68,31 @@
     "darwin",
     "linux"
   ],
-  "license": "MIT",
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-client-runtime": "^0.1.1-rc.2",
-    "@deepseek-ai/dsh-client-ui-settings": "^0.1.1-rc.2",
-    "@deepseek-ai/dsh-client-ui-slots": "^0.1.1-rc.2",
-    "@deepseek-ai/dsh-settings": "^0.1.1-rc.2",
-    "@deepseek-ai/schemastery": "^3.18.1",
-    "react": "^18.2.0"
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/schemastery": "*",
+    "react": "^18.2.0 || ^19.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    }
   },
   "dependencies": {
     "undici": "^7.0.0"
   },
   "devDependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1",
     "@types/node": "^24.0.0",
     "@types/react": "~18.3.1",
-    "esbuild": "^0.28.2",
-    "typescript": "^5.6.0"
+    "esbuild": "^0.25.0",
+    "typescript": "^5.9.3"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/build-client.mjs",

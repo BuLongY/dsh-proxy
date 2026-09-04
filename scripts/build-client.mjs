@@ -1,31 +1,53 @@
-// Bundles the browser half into the inertial CJS factory format the DSH
-// client module system expects: window.__ModuleLoader__.load({id, factory}).
-// tsc emits lib/client.js as plain ESM for the types; this script overwrites
-// it with the loadable bundle. Externals resolve through the module system's
-// static table (react) and package rows (@deepseek-ai/dsh-client-runtime).
-import { build } from 'esbuild'
-import { writeFileSync } from 'node:fs'
+import { build } from "esbuild";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const result = await build({
-  entryPoints: ['src/client.tsx'],
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const outfile = join(root, "lib", "client.js");
+
+await mkdir(join(root, "lib"), { recursive: true });
+
+await build({
+  absWorkingDir: root,
+  entryPoints: ["src/client.tsx"],
+  outfile,
   bundle: true,
-  format: 'cjs',
-  platform: 'browser',
-  write: false,
-  external: ['react', '@deepseek-ai/dsh-client-runtime/client'],
-  logLevel: 'warning',
-})
-
-const code = result.outputFiles[0].text
-const wrapped = `window.__ModuleLoader__.load({
-\tid: "dsh-proxy",
-\tfactory: (require) => {
-\t\tvar module = { exports: {} };
-\t\tvar exports = module.exports;
-${code}
-\t\treturn module.exports;
-\t}
+  format: "cjs",
+  platform: "browser",
+  target: ["es2022"],
+  jsx: "automatic",
+  logLevel: "info",
+  external: [
+    "react",
+    "react/jsx-runtime",
+    "react-dom",
+    "@deepseek-ai/dsh-client-runtime/client",
+    "@deepseek-ai/dsh-client-runtime",
+  ],
 });
-`
-writeFileSync('lib/client.js', wrapped)
-console.log(`lib/client.js bundled (${wrapped.length} bytes)`)
+
+const body = await readFile(outfile, "utf8");
+const wrapped = [
+  "window.__ModuleLoader__.load({",
+  '  id: "dsh-proxy",',
+  "  factory: function (module, exports, require) {",
+  body.replace(/^"use strict";\s*/m, ""),
+  "return module.exports;",
+  "  }",
+  "});",
+  "",
+].join("\n");
+await writeFile(outfile, wrapped);
+const typesDir = join(root, "lib", "types");
+await mkdir(typesDir, { recursive: true });
+await writeFile(
+  join(typesDir, "client.d.ts"),
+  [
+    'export declare const name: "dsh-proxy";',
+    "export declare const inject: string[];",
+    "export declare function apply(ctx: unknown): void;",
+    "",
+  ].join("\n"),
+);
+console.log("wrote", outfile);
