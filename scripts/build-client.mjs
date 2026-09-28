@@ -10,7 +10,9 @@ await mkdir(join(root, "lib"), { recursive: true });
 
 await build({
   absWorkingDir: root,
-  entryPoints: ["src/client.tsx"],
+  // Absolute entry: esbuild otherwise resolves relative entries from its cwd,
+  // which can walk outside the project when the build is driven from elsewhere.
+  entryPoints: [join(root, "src", "client.tsx")],
   outfile,
   bundle: true,
   format: "cjs",
@@ -31,7 +33,12 @@ const body = await readFile(outfile, "utf8");
 const wrapped = [
   "window.__ModuleLoader__.load({",
   '  id: "dsh-proxy",',
-  "  factory: function (module, exports, require) {",
+  // DSH 0.1.2 materializes a client factory as `registered(makeRequire(edges))`:
+  // it receives only `require` and must return the module it built. The esbuild
+  // CJS body assigns `module.exports`, so that assignment is what gets returned.
+  "  factory: function (require) {",
+  "var module = { exports: {} };",
+  "var exports = module.exports;",
   body.replace(/^"use strict";\s*/m, ""),
   "return module.exports;",
   "  }",

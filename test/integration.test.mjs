@@ -17,6 +17,10 @@ test("installed plugin can fetch through the proxy when a live key is set", asyn
   const { apply } = await import(pathToFileURL(join(root, "lib", "index.js")).href);
   const effects = [];
   const ctx = {
+    inject(_names, callback) {
+      callback({});
+      return undefined;
+    },
     logger() {
       return { info() {}, warn() {}, error() {} };
     },

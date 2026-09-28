@@ -6,6 +6,8 @@ declare module "@deepseek-ai/cordis" {
       error(...args: unknown[]): void;
     };
     effect(factory: () => void | (() => void), name?: string): () => void;
+    /** Start a nested plugin once the named services are available. */
+    inject(names: string[], callback: (ctx: Context) => void): unknown;
   }
 }
 

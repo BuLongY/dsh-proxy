@@ -1,6 +1,6 @@
 {
   "name": "dsh-proxy",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Route DeepSeek Harness host-side fetch (LLM, model discovery, market, web search) through a local HTTP/HTTPS proxy such as Clash/mihomo/v2ray, without TUN mode.",
   "keywords": [
     "dsh",
@@ -36,8 +36,7 @@
     "./package.json": "./package.json"
   },
   "files": [
-    "lib/index.js",
-    "lib/client.js",
+    "lib/**/*.js",
     "lib/types/**/*.d.ts",
     "cordis.patch.yml",
     "dsh.plugin.json",
@@ -52,10 +51,9 @@
     },
     "client": {
       "inject": [
-        "@deepseek-ai/dsh-client-runtime",
         "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-ui-settings",
-        "@deepseek-ai/dsh-client-ui-slots"
+        "@deepseek-ai/dsh-client-ui-renderer"
       ],
       "platform": "web"
     }

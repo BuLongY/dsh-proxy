@@ -1,12 +1,9 @@
 {
   "name": "dsh-proxy",
   "description": "Custom HTTP/HTTPS proxy for DeepSeek Harness host-side fetch",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "entry": {
-    "name": "dsh-proxy",
-    "inject": {
-      "settings": { "required": false }
-    }
+    "name": "dsh-proxy"
   },
   "client": {
     "platform": "web"

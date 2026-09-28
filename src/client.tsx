@@ -1,8 +1,13 @@
 import { createElement, useEffect, useState, type CSSProperties, type ReactElement } from "react";
-import type { ClientContext } from "@deepseek-ai/dsh-client-runtime/client";
+import type { ClientContext } from "./client-context.js";
 import { NS, type ProxyConfig } from "./shared.js";
 
 export const name = "dsh-proxy";
+/**
+ * DSH 0.1.2 resolves `dsh.client.inject` (package ids) for module arrival, then
+ * cordis injects the services these packages provide. The service names are the
+ * ones the ui-settings, ui-renderer and locale plugins actually register.
+ */
 export const inject = ["settingsScope", "slots", "locale"];
 
 const SLOT = "settings.section";

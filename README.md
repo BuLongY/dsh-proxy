@@ -4,7 +4,9 @@
 
 Route **DeepSeek Harness host-side fetch** (LLM calls, model discovery, plugin market, web search) through a local HTTP/HTTPS proxy such as Clash / mihomo / v2ray. **No TUN mode**, and no system proxy required.
 
-Built for DSH **0.1.1-rc.2** and the [dsh-market](https://github.com/dsh-market/dsh-market) plugin layout.
+Built for DSH **0.1.2-rc.1** and the [dsh-market](https://github.com/dsh-market/dsh-market) plugin layout.
+
+> **0.4.0 fix**: DSH 0.1.2 changed the client module contract to `factory(require) => exports` (was `factory(module, exports, require)`) and dropped the `dsh-client-runtime` / `dsh-client-ui-slots` packages. 0.3.x fails to load on both counts; 0.4.0 follows the new contract.
 
 ## Why this plugin
 
@@ -42,12 +44,28 @@ Settings persist in DSH `settings.yaml` under `dsh-proxy:` and apply live.
 
 | Piece | Requirement |
 | --- | --- |
-| DSH | `0.1.1-rc.2` and later `0.1.1` / `0.1.2` hosts that still expose `ctx.settings.register` and `settings.section` |
+| DSH | `0.1.2-rc.1` and later hosts that still expose `ctx.settings.register` and `settings.section` |
 | Profile | `web` |
 | Node | `>= 20` |
 | Market | `dsh.bundle.patch`, bilingual README, prebuilt client factory, no `prepare` script |
 
-This 0.3.x line replaces the old `installSettingsSection` + `settings.plugin.item` APIs that broke after DSH 0.1.1.
+The 0.3.x line replaced the old `installSettingsSection` + `settings.plugin.item` APIs that broke after DSH 0.1.1.
+
+## Implementation (0.4.0)
+
+The host half no longer swaps global `fetch` for an undici one. It keeps **Node's native fetch** and attaches an undici `dispatcher` to each request:
+
+- Proxy-matching hosts use a `ProxyAgent`; `noProxy` hosts use an explicit `Agent` (direct).
+- Native `Request` / `Response`, streaming, and error semantics are preserved so SDK type checks keep working.
+- Unloading the plugin restores the exact original `fetch`.
+
+The client settings page registers into `settings.section` and depends on the `settingsScope`, `slots`, and `locale` services.
+
+## Desktop note
+
+If a desktop profile fails to load because of one bad plugin, the app enters the **safe profile** and purges every user plugin from it at startup (`SAFE_MODE_PLUGIN_PURGE` in the log). The symptom is plugins that keep disappearing and cannot be installed.
+
+`dsh-proxy` 0.4.0 does not trigger this by itself; other plugins in the same profile can, and should be checked first.
 
 ## License
 

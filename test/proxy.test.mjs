@@ -31,6 +31,10 @@ test("apply patches global fetch and restores it on dispose", async () => {
   const original = globalThis.fetch;
   const effects = [];
   const ctx = {
+    inject(_names, callback) {
+      callback({});
+      return undefined;
+    },
     logger() {
       return { info() {}, warn() {}, error() {} };
     },
@@ -50,6 +54,10 @@ test("disabled config leaves fetch untouched", async () => {
   const { apply } = await loadHost();
   const original = globalThis.fetch;
   const ctx = {
+    inject(_names, callback) {
+      callback({});
+      return undefined;
+    },
     logger() {
       return { info() {}, warn() {}, error() {} };
     },
@@ -59,4 +67,57 @@ test("disabled config leaves fetch untouched", async () => {
   };
   apply(ctx, { enabled: false });
   assert.equal(globalThis.fetch, original);
+});
+
+test("patched fetch routes each host to the proxy or the direct agent", async () => {
+  // Deterministic routing check: capture the dispatcher the patch hands to the
+  // underlying fetch instead of depending on live network reachability.
+  const original = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = ((input, init) => {
+    calls.push({ url: String(input), dispatcher: init?.dispatcher });
+    return Promise.resolve(new Response("ok", { status: 200 }));
+  });
+
+  const { apply } = await loadHost();
+  const effects = [];
+  const ctx = {
+    inject(_names, callback) {
+      callback({});
+      return undefined;
+    },
+    logger() {
+      return { info() {}, warn() {}, error() {} };
+    },
+    effect(factory) {
+      const dispose = factory();
+      effects.push(dispose);
+      return dispose;
+    },
+  };
+
+  apply(ctx, {
+    enabled: true,
+    host: "127.0.0.1",
+    port: 7890,
+    noProxy: ["localhost", "127.0.0.1", "::1"],
+  });
+
+  try {
+    await fetch("https://api.51tokens.top/v1/models");
+    await fetch("http://127.0.0.1:3080/plugins/x.js");
+    await fetch("https://localhost/health");
+
+    assert.equal(calls.length, 3);
+    // Every call must carry a dispatcher — that is what makes it use the proxy
+    // or the explicit direct agent instead of the ambient global dispatcher.
+    assert.ok(calls.every((call) => call.dispatcher !== undefined));
+    // The remote host goes through the proxy agent; the two local hosts share
+    // one direct agent and must not reuse the proxy dispatcher.
+    assert.notEqual(calls[0].dispatcher, calls[1].dispatcher);
+    assert.equal(calls[1].dispatcher, calls[2].dispatcher);
+  } finally {
+    for (const dispose of effects.reverse()) dispose?.();
+    globalThis.fetch = original;
+  }
 });
